@@ -81,7 +81,7 @@ export default function (pi: any) {
       ctx.ui.setWidget("nemo-cat", () => ({
         render: () => nemo!.render(),
         invalidate: () => { }
-      }), { placement: "belowEditor" });
+      }), { placement: "aboveEditor", alignment: "right" });
     };
 
     animInterval = setInterval(() => {
