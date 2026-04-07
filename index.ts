@@ -4,25 +4,17 @@ export const MOOD_FRAMES = {
     [`  /\\___/\\  `, `≈( o w o )≈`, ` /       \\ `],
     [`  /\\___/\\  `, `=( - w - )=`, ` /       \\ `],
     [`  /\\___/\\  `, `≈( o w o )≈`, ` /       \\ `],
-    [`  /\\___/|  `, `=( o w o )=`,  ` /       \\ `],
+    [`  /\\___/|  `, `=( o w o )=`, ` /       \\ `],
     [`  /\\___/\\  `, `≈( o w o )≈`, ` /       \\ `],
     [`  /\\___/\\  `, `=( o w o )=`, ` /       \\ `],
-    [`  |\\___/\\  `, `≈( o w o )≈`, ` /       \\ `],
-    [`  /\\___/\\  `, `=( o w o )=`, ` /       \\ `],
-    [`  /\\___/\\  `, `≈( o w o )≈`, ` /       \\ `],
-    [`  /\\___/\\  `, `=( o w o )=`, ` /       \\ `],
-    [`  /\\___/\\  `, `≈( o w o )≈`, ` /       \\ `]
+    [`  |\\___/\\  `, `≈( o w o )≈`, ` /       \\ `]
   ],
   happy: [
-    [`  /\\___/\\  `, `=( ^ W ^ )=`, ` / (m)(m)\\`],
-    [`  /\\___/\\  `, `≈( ^ w ^ )≈`, ` /(m)(m) \\`],
     [`  /\\___/\\  `, `=( ^ W ^ )=`, ` / (m)(m)\\`],
     [`  /\\___/\\  `, `≈( ^ w ^ )≈`, ` /(m)(m) \\`]
   ],
   sleeping: [
     [`  /\\___/\\ z`, `=( - . - )=`, `  (m)_(m)  `],
-    [`  /\\___/\\ z`, `=( - . - )=`, `  (m)_(m)  `],
-    [`  /\\___/\\ Z`, `≈( - . - )≈`, `  (m)_(m)  `],
     [`  /\\___/\\ Z`, `≈( - . - )≈`, `  (m)_(m)  `]
   ],
   playing: [
@@ -35,114 +27,173 @@ export const MOOD_FRAMES = {
   ],
   eating: [
     [`  /\\___/\\  `, `=( ^ O ^ )=`, `  (m) (m)  `],
-    [`  /\\___/\\  `, `≈( ^ o ^ )≈`, `  (m) (m)  `],
-    [`  /\\___/\\  `, `=( ^ - ^ )=`, `  (m) (m)  `]
+    [`  /\\___/\\  `, `≈( ^ o ^ )≈`, `  (m) (m)  `]
   ]
 };
+
 export class NemoComponent {
-  constructor() {
-    this._state = { mood: "idle", frameIndex: 0 };
-  }
-  get state() {
-    return this._state;
-  }
-  setMood(mood) {
+  private _state = { mood: "idle", frameIndex: 0 };
+  public isCompacting = false;
+  public isAgentActive = false; // Track if a task is currently running
+
+  get state() { return this._state; }
+
+  setMood(mood: string, force: boolean = false) {
+    // 1. Compaction is the highest priority
+    if (this.isCompacting && !force) return;
+
+    // 2. If Agent is active, don't allow "sleeping" or "idle" to override "playing"
+    if (this.isAgentActive && (mood === "sleeping" || mood === "idle") && !force) return;
+
     if (this._state.mood !== mood) {
       this._state.mood = mood;
       this._state.frameIndex = 0;
     }
   }
+
   advanceFrame() {
-    const frames = MOOD_FRAMES[this._state.mood] || MOOD_FRAMES["idle"];
+    const moodKey = this._state.mood as keyof typeof MOOD_FRAMES;
+    const frames = MOOD_FRAMES[moodKey] || MOOD_FRAMES.idle;
     this._state.frameIndex = (this._state.frameIndex + 1) % frames.length;
   }
-  render() {
+
+  render(): string[] {
     const orange = "\x1B[38;5;208m";
     const reset = "\x1B[0m";
-    const frames = MOOD_FRAMES[this._state.mood] || MOOD_FRAMES["idle"];
+    const moodKey = this._state.mood as keyof typeof MOOD_FRAMES;
+    const frames = MOOD_FRAMES[moodKey] || MOOD_FRAMES.idle;
     const frame = frames[this._state.frameIndex] || frames[0];
     return frame.map((line) => `${orange}${line}${reset}`);
   }
-  // Helper for the web preview
-  renderPlain() {
-    const frames = MOOD_FRAMES[this._state.mood] || MOOD_FRAMES["idle"];
-    const frame = frames[this._state.frameIndex] || frames[0];
-    return frame.join("\n");
-  }
 }
-export default function(pi) {
-  let nemo = null;
-  let animInterval = null;
-  let idleTimer = null;
-  pi.on("session_start", async (_event, ctx) => {
+
+export default function (pi: any) {
+  let nemo: NemoComponent | null = null;
+  let animInterval: any = null;
+  let idleTimer: any = null;
+  let happyTransitionTimer: any = null;
+
+  pi.on("session_start", async (_event: any, ctx: any) => {
     nemo = new NemoComponent();
+
     const updateWidget = () => {
       if (!nemo) return;
       ctx.ui.setWidget("nemo-cat", () => ({
-        render: () => nemo.render(),
-        invalidate: () => {
-        }
+        render: () => nemo!.render(),
+        invalidate: () => { }
       }), { placement: "belowEditor" });
     };
-    updateWidget();
+
     animInterval = setInterval(() => {
       if (nemo) {
         nemo.advanceFrame();
         updateWidget();
       }
     }, 350);
+
     const resetIdleTimer = () => {
       if (idleTimer) clearTimeout(idleTimer);
-      if (nemo?.state.mood === "sleeping") nemo.setMood("idle");
-      idleTimer = setTimeout(() => nemo?.setMood("sleeping"), 3e4);
+
+      // If we move while sleeping, wake up
+      if (nemo?.state.mood === "sleeping") {
+        nemo.setMood("idle");
+      }
+
+      idleTimer = setTimeout(() => {
+        // Only go to sleep if we are NOT busy with an agent task or compaction
+        if (nemo && !nemo.isCompacting && !nemo.isAgentActive) {
+          nemo.setMood("sleeping");
+        } else {
+          // If we were busy, check again in 30s instead of falling asleep
+          resetIdleTimer();
+        }
+      }, 30000);
     };
-    const startWorking = () => {
+
+    const stopAction = () => {
+      if (!nemo) return;
+      // If an agent task ended, but another is still technically active, don't go happy yet
+      if (nemo.isAgentActive) return;
+
+      nemo.setMood("happy");
+
+      if (happyTransitionTimer) clearTimeout(happyTransitionTimer);
+      happyTransitionTimer = setTimeout(() => {
+        if (nemo?.state.mood === "happy") {
+          nemo.setMood("idle");
+        }
+      }, 3000);
+    };
+
+    // --- Compaction Overrides ---
+    pi.on("session_before_compact", () => {
+      if (!nemo) return;
+      nemo.isCompacting = true;
+      nemo.setMood("cleaning", true);
+      updateWidget();
+    });
+
+    pi.on("session_compact", () => {
+      if (!nemo) return;
+      nemo.isCompacting = false;
+      stopAction();
+      resetIdleTimer();
+    });
+
+    // --- Agent Activity (Playing) ---
+    // We use agent_start/end as the primary "Busy" signal
+    pi.on("agent_start", () => {
+      if (!nemo) return;
+      nemo.isAgentActive = true;
+      nemo.setMood("playing");
+      resetIdleTimer();
+    });
+
+    pi.on("agent_end", () => {
+      if (!nemo) return;
+      nemo.isAgentActive = false;
+      stopAction();
+    });
+
+    // These sub-events ensure the cat stays in "playing" mood during long tool calls
+    pi.on("tool_call_start", () => {
+      if (nemo) nemo.isAgentActive = true;
       nemo?.setMood("playing");
       resetIdleTimer();
-    };
-    pi.on("agent_start", startWorking);
-    pi.on("tool_call_start", startWorking);
-    pi.on("step_start", startWorking);
-    const stopWorking = () => {
-      nemo?.setMood("happy");
-      setTimeout(() => {
-        if (nemo?.state.mood === "happy") nemo?.setMood("idle");
-      }, 3e3);
-    };
-    pi.on("agent_end", stopWorking);
-    pi.on("tool_call_end", stopWorking);
-    pi.on("step_end", stopWorking);
-    let typingTimeout = null;
-    const handleTyping = () => {
-      nemo?.setMood("eating");
-      if (typingTimeout) clearTimeout(typingTimeout);
-      typingTimeout = setTimeout(() => {
-        if (nemo?.state.mood === "eating") nemo?.setMood("idle");
-      }, 1e3);
+    });
+
+    pi.on("step_start", () => {
+      if (nemo) nemo.isAgentActive = true;
+      nemo?.setMood("playing");
       resetIdleTimer();
+    });
+
+    // --- Typing behavior ---
+    const handleTyping = () => {
+      if (nemo && !nemo.isAgentActive) {
+        nemo.setMood("eating");
+      }
+      resetIdleTimer();
+
+      // Return to idle shortly after typing stops if not busy
+      setTimeout(() => {
+        if (nemo?.state.mood === "eating" && !nemo.isAgentActive) {
+           nemo.setMood("idle");
+        }
+      }, 2000);
     };
+
     pi.on("user_typing", handleTyping);
     pi.on("user_input", handleTyping);
-    pi.on("input_start", handleTyping);
-    const startCompacting = () => {
-      nemo?.setMood("cleaning");
-      resetIdleTimer();
-    };
-    pi.on("context_compaction_start", startCompacting);
-    pi.on("context_compact", startCompacting);
-    pi.on("compaction_start", startCompacting);
-    const stopCompacting = () => {
-      nemo?.setMood("happy");
-      setTimeout(() => {
-        if (nemo?.state.mood === "happy") nemo?.setMood("idle");
-      }, 3e3);
-    };
-    pi.on("context_compaction_end", stopCompacting);
-    pi.on("compaction_end", stopCompacting);
+
+    // Initial State
     resetIdleTimer();
+    updateWidget();
   });
+
   pi.on("session_end", () => {
     if (animInterval) clearInterval(animInterval);
     if (idleTimer) clearTimeout(idleTimer);
+    if (happyTransitionTimer) clearTimeout(happyTransitionTimer);
   });
 }
