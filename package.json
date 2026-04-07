@@ -1,0 +1,9 @@
+{
+  "name": "nemo-pet",
+  "version": "1.0.0",
+  "description": "Animated orange cat ASCII art in pi status bar",
+  "main": "./index.ts",
+  "pi": {
+    "extensions": ["./index.ts"]
+  }
+}
